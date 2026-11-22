@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#FAF8F5" />
+  <rect x="32" y="32" width="448" height="448" fill="none" stroke="#141414" stroke-width="6" />
+  <!-- Minimalist atelier hanger & mirror frame emblem -->
+  <path d="M256 120c0-18 14-32 32-32 16 0 28 12 28 27 0 13-9 22-22 28l-38 18v24" fill="none" stroke="#141414" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" />
+  <path d="M256 185L116 286c-10 7-5 23 8 23h264c13 0 18-16 8-23L256 185z" fill="none" stroke="#141414" stroke-width="14" stroke-linejoin="round" />
+  <line x1="154" y1="364" x2="358" y2="364" stroke="#9A3B26" stroke-width="8" stroke-linecap="round" />
+  <path d="M214 404h84" stroke="#141414" stroke-width="8" stroke-linecap="round" />
+</svg>

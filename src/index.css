@@ -1,0 +1,56 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Cormorant Garamond", "Songti SC", "Noto Serif SC", Georgia, serif;
+  --font-sans: "Plus Jakarta Sans", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+  --color-ivory: #FAF8F5;
+  --color-linen: #F2EFE9;
+  --color-hairline: #E6E1D8;
+  --color-ink: #141414;
+  --color-stone: #6E6A63;
+  --color-editorial: #9A3B26;
+}
+
+@layer base {
+  html,
+  body {
+    background-color: #EFECE6;
+    color: #141414;
+    font-family: var(--font-sans);
+    overscroll-behavior-y: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.pt-safe {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+/* Subtle transparency checkerboard for cutout editor & garment previews */
+.bg-checkerboard {
+  background-color: #ffffff;
+  background-image:
+    linear-gradient(45deg, #EFECE6 25%, transparent 25%),
+    linear-gradient(-45deg, #EFECE6 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #EFECE6 75%),
+    linear-gradient(-45deg, transparent 75%, #EFECE6 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+
+/* Hide scrollbars cleanly for horizontal editorial filter strips */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Atelier 镜橱",
+  "description": "极简时装杂志风离线手机试衣间 PWA：支持拍照、相册导入与文件夹授权绑定、本地智能去背与笔刷微调、双指手势人像试衣、分类衣橱与造型册保存。",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
