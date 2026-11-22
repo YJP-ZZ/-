@@ -91,6 +91,9 @@ export const ModelsManager: React.FC<ModelsManagerProps> = ({
                     <p className="mt-0.5 text-[11px] text-[#6E6A63] tabular-nums">
                       {m.width} × {m.height}
                       {m.isDefault ? ' · 默认' : ''}
+                      {m.poseLandmarks?.source === 'auto' || m.poseLandmarks?.source === 'manual'
+                        ? ' · 已标身形'
+                        : ''}
                     </p>
                   </div>
 

@@ -64,6 +64,25 @@ export const SEASON_LABELS: Record<GarmentSeason, string> = {
   winter: '冬季',
 };
 
+export interface BodyPoint {
+  x: number; // normalized 0..1 of portrait width
+  y: number; // normalized 0..1 of portrait height
+}
+
+export interface BodyLandmarks {
+  leftShoulder: BodyPoint;
+  rightShoulder: BodyPoint;
+  leftHip: BodyPoint;
+  rightHip: BodyPoint;
+  leftKnee?: BodyPoint;
+  rightKnee?: BodyPoint;
+  leftAnkle?: BodyPoint;
+  rightAnkle?: BodyPoint;
+  source: 'auto' | 'manual' | 'default';
+  confidence?: number;
+  updatedAt: number;
+}
+
 export interface ModelPortrait {
   id: string;
   name: string;
@@ -72,6 +91,7 @@ export interface ModelPortrait {
   width: number;
   height: number;
   isDefault: boolean;
+  poseLandmarks?: BodyLandmarks;
   createdAt: number;
 }
 

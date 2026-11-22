@@ -12,17 +12,21 @@ import {
   Plus,
   RotateCcw,
   RotateCw,
+  ScanLine,
   Scissors,
+  Shuffle,
   SlidersHorizontal,
   SunMedium,
   Trash2,
   Unlock,
   Upload,
   User,
+  Wand2,
   X,
 } from 'lucide-react';
 import {
   GARMENT_CATEGORIES,
+  type BodyLandmarks,
   type GarmentCategory,
   type GarmentItem,
   type ModelPortrait,
@@ -30,6 +34,7 @@ import {
 } from '../types/wardrobe';
 import { BlobImage, useBlobUrl } from '../hooks/useBlobUrl';
 import { loadImageFromBlob, renderOutfitComposite } from '../lib/imageEngine';
+import { getDefaultBodyLandmarks } from '../lib/poseFit';
 
 interface TryOnStudioProps {
   models: ModelPortrait[];
@@ -43,6 +48,11 @@ interface TryOnStudioProps {
   onLayersChange: React.Dispatch<React.SetStateAction<OutfitLayer[]>>;
   onRequestAddGarment: (garment: GarmentItem) => void;
   onEditGarmentCutout: (garment: GarmentItem) => void;
+  onUpdateModelLandmarks: (modelId: string, landmarks: BodyLandmarks) => Promise<void>;
+  onRedetectModelLandmarks: (modelId: string) => Promise<BodyLandmarks | null>;
+  onAutoFitLayers: (instanceId?: string, overrideLandmarks?: BodyLandmarks) => Promise<void>;
+  onRandomOutfit: () => Promise<void>;
+  isAutoFitting: boolean;
   onSaveLookbook: (payload: {
     title: string;
     notes: string;
@@ -104,6 +114,11 @@ export const TryOnStudio: React.FC<TryOnStudioProps> = ({
   onLayersChange,
   onRequestAddGarment,
   onEditGarmentCutout,
+  onUpdateModelLandmarks,
+  onRedetectModelLandmarks,
+  onAutoFitLayers,
+  onRandomOutfit,
+  isAutoFitting,
   onSaveLookbook,
   onGoToWardrobe,
 }) => {
@@ -135,6 +150,13 @@ export const TryOnStudio: React.FC<TryOnStudioProps> = ({
   const [occlusionMode, setOcclusionMode] = useState(false);
   const [occlusionBrushMode, setOcclusionBrushMode] = useState<'erase' | 'restore'>('erase');
   const [occlusionBrushSize, setOcclusionBrushSize] = useState(26);
+
+  const [poseCalibrateMode, setPoseCalibrateMode] = useState(false);
+  const [draftLandmarks, setDraftLandmarks] = useState<BodyLandmarks | null>(null);
+  const draggingJointRef = useRef<keyof Pick<
+    BodyLandmarks,
+    'leftShoulder' | 'rightShoulder' | 'leftHip' | 'rightHip' | 'leftAnkle' | 'rightAnkle'
+  > | null>(null);
 
   const occlusionCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const occlusionMaskCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -634,32 +656,65 @@ export const TryOnStudio: React.FC<TryOnStudioProps> = ({
       {/* Portrait Fitting Stage + Bottom Thumb Dock */}
       <div className="relative flex flex-1 min-h-0 flex-col">
         {/* Compact Stage Top Strip */}
-        <div className="flex h-11 shrink-0 items-center justify-between border-b border-[#E6E1D8] bg-[#FAF8F5] px-3">
-          <div className="flex items-center gap-2 min-w-0">
+        <div className="flex h-11 shrink-0 items-center justify-between border-b border-[#E6E1D8] bg-[#FAF8F5] px-2.5">
+          <div className="flex items-center gap-1.5 min-w-0">
             <button
               type="button"
               onClick={() => setShowModelPicker(true)}
-              className="inline-flex min-h-[36px] items-center gap-1.5 border border-[#E6E1D8] bg-white px-2.5 text-xs font-medium text-[#141414] hover:bg-[#F2EFE9] truncate"
+              className="inline-flex min-h-[36px] items-center gap-1 border border-[#E6E1D8] bg-white px-2 text-xs font-medium text-[#141414] hover:bg-[#F2EFE9] truncate"
             >
               <User className="h-3.5 w-3.5 shrink-0" />
-              <span className="truncate max-w-[130px]">
+              <span className="truncate max-w-[96px]">
                 {activeModel ? activeModel.name : '添加人像'}
               </span>
             </button>
-            <span className="text-[11px] text-[#6E6A63] tabular-nums shrink-0">
-              {layers.length} 件
-            </span>
+            {activeModel && !occlusionMode && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (poseCalibrateMode) {
+                    setPoseCalibrateMode(false);
+                    setDraftLandmarks(null);
+                  } else {
+                    setShowLightingPanel(false);
+                    setDraftLandmarks(activeModel.poseLandmarks ?? getDefaultBodyLandmarks());
+                    setPoseCalibrateMode(true);
+                  }
+                }}
+                className={`inline-flex min-h-[36px] items-center gap-1 border px-2 text-[11px] font-medium shrink-0 ${
+                  poseCalibrateMode
+                    ? 'border-[#9A3B26] bg-[#9A3B26] text-[#FAF8F5]'
+                    : 'border-[#E6E1D8] bg-white text-[#141414]'
+                }`}
+                title="查看或微调模特肩腰腿身形锚点"
+              >
+                <ScanLine className="h-3.5 w-3.5" />
+                <span>身形</span>
+              </button>
+            )}
           </div>
 
-          <div className="flex items-center gap-1.5 shrink-0">
-            {layers.length > 0 && !occlusionMode && (
+          <div className="flex items-center gap-1 shrink-0">
+            {activeModel && garments.length > 0 && !occlusionMode && !poseCalibrateMode && (
+              <button
+                type="button"
+                disabled={isAutoFitting}
+                onClick={() => void onRandomOutfit()}
+                className="inline-flex min-h-[36px] items-center gap-1 border border-[#E6E1D8] bg-white px-2 text-xs font-medium text-[#141414] hover:border-[#141414] disabled:opacity-40 whitespace-nowrap"
+                title="从衣橱随机生成全套搭配并自动贴合（保留已锁定单品）"
+              >
+                <Shuffle className="h-3.5 w-3.5" />
+                <span>随机</span>
+              </button>
+            )}
+            {layers.length > 0 && !occlusionMode && !poseCalibrateMode && (
               <button
                 type="button"
                 onClick={() => {
                   onLayersChange([]);
                   onSelectInstance(null);
                 }}
-                className="min-h-[36px] px-2 text-xs text-[#6E6A63] hover:text-[#9A3B26]"
+                className="min-h-[36px] px-1.5 text-xs text-[#6E6A63] hover:text-[#9A3B26]"
               >
                 清空
               </button>
@@ -667,11 +722,11 @@ export const TryOnStudio: React.FC<TryOnStudioProps> = ({
             <button
               type="button"
               onClick={() => setShowSaveModal(true)}
-              disabled={!activeModel || layers.length === 0 || occlusionMode}
-              className="inline-flex min-h-[36px] items-center gap-1.5 bg-[#141414] px-3 text-xs font-medium text-[#FAF8F5] disabled:opacity-35 hover:bg-[#2a2a2a] whitespace-nowrap"
+              disabled={!activeModel || layers.length === 0 || occlusionMode || poseCalibrateMode}
+              className="inline-flex min-h-[36px] items-center gap-1 bg-[#141414] px-2.5 text-xs font-medium text-[#FAF8F5] disabled:opacity-35 hover:bg-[#2a2a2a] whitespace-nowrap"
             >
               <BookmarkCheck className="h-3.5 w-3.5" />
-              <span>保存造型</span>
+              <span>保存</span>
             </button>
           </div>
         </div>
@@ -795,9 +850,99 @@ export const TryOnStudio: React.FC<TryOnStudioProps> = ({
                 );
               })}
 
-              {layers.length === 0 && (
+              {layers.length === 0 && !poseCalibrateMode && (
                 <div className="pointer-events-none absolute inset-x-3 bottom-3 bg-[#FAF8F5]/90 border border-[#E6E1D8] px-3 py-1.5 text-center text-[11px] text-[#6E6A63] backdrop-blur-xs">
-                  下方点选单品上身 · 支持双指捏合缩放与旋转
+                  {isAutoFitting
+                    ? '正在自动识别身形并贴合衣物...'
+                    : '下方点选单品 · 将自动对准肩腰腿上身'}
+                </div>
+              )}
+
+              {/* Interactive Body Skeleton Anchor Overlay */}
+              {poseCalibrateMode && draftLandmarks && (
+                <div
+                  className="absolute inset-0 z-40 bg-black/20 touch-none select-none"
+                  onPointerMove={(e) => {
+                    const key = draggingJointRef.current;
+                    const stage = stageRef.current;
+                    if (!key || !stage) return;
+                    const rect = stage.getBoundingClientRect();
+                    if (rect.width === 0 || rect.height === 0) return;
+                    const nx = Math.max(0.03, Math.min(0.97, (e.clientX - rect.left) / rect.width));
+                    const ny = Math.max(0.03, Math.min(0.97, (e.clientY - rect.top) / rect.height));
+                    setDraftLandmarks((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            [key]: { x: nx, y: ny },
+                            source: 'manual',
+                            updatedAt: Date.now(),
+                          }
+                        : prev
+                    );
+                  }}
+                  onPointerUp={() => {
+                    draggingJointRef.current = null;
+                  }}
+                  onPointerCancel={() => {
+                    draggingJointRef.current = null;
+                  }}
+                >
+                  <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="pointer-events-none h-full w-full">
+                    {(() => {
+                      const sL = draftLandmarks.leftShoulder;
+                      const sR = draftLandmarks.rightShoulder;
+                      const hL = draftLandmarks.leftHip;
+                      const hR = draftLandmarks.rightHip;
+                      const aL = draftLandmarks.leftAnkle ?? { x: hL.x, y: 0.88 };
+                      const aR = draftLandmarks.rightAnkle ?? { x: hR.x, y: 0.88 };
+                      const sMid = { x: (sL.x + sR.x) * 50, y: (sL.y + sR.y) * 50 };
+                      const hMid = { x: (hL.x + hR.x) * 50, y: (hL.y + hR.y) * 50 };
+                      return (
+                        <g stroke="#FAF8F5" strokeWidth="0.7" strokeDasharray="1.8 1.2">
+                          <line x1={sL.x * 100} y1={sL.y * 100} x2={sR.x * 100} y2={sR.y * 100} />
+                          <line x1={sMid.x} y1={sMid.y} x2={hMid.x} y2={hMid.y} />
+                          <line x1={hL.x * 100} y1={hL.y * 100} x2={hR.x * 100} y2={hR.y * 100} />
+                          <line x1={hL.x * 100} y1={hL.y * 100} x2={aL.x * 100} y2={aL.y * 100} />
+                          <line x1={hR.x * 100} y1={hR.y * 100} x2={aR.x * 100} y2={aR.y * 100} />
+                        </g>
+                      );
+                    })()}
+                  </svg>
+
+                  {(
+                    [
+                      { key: 'leftShoulder', label: '左肩', pt: draftLandmarks.leftShoulder },
+                      { key: 'rightShoulder', label: '右肩', pt: draftLandmarks.rightShoulder },
+                      { key: 'leftHip', label: '左胯', pt: draftLandmarks.leftHip },
+                      { key: 'rightHip', label: '右胯', pt: draftLandmarks.rightHip },
+                      {
+                        key: 'leftAnkle',
+                        label: '左踝',
+                        pt: draftLandmarks.leftAnkle ?? { x: 0.45, y: 0.88 },
+                      },
+                      {
+                        key: 'rightAnkle',
+                        label: '右踝',
+                        pt: draftLandmarks.rightAnkle ?? { x: 0.55, y: 0.88 },
+                      },
+                    ] as const
+                  ).map(({ key, label, pt }) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onPointerDown={(e) => {
+                        e.stopPropagation();
+                        e.currentTarget.setPointerCapture(e.pointerId);
+                        draggingJointRef.current = key;
+                      }}
+                      style={{ left: `${pt.x * 100}%`, top: `${pt.y * 100}%` }}
+                      className="absolute -translate-x-1/2 -translate-y-1/2 flex h-7 w-7 items-center justify-center rounded-full border-2 border-[#FAF8F5] bg-[#9A3B26] text-[9px] font-semibold text-[#FAF8F5] shadow-md touch-none cursor-grab active:cursor-grabbing"
+                      title={`拖动校准${label}`}
+                    >
+                      {label.slice(1)}
+                    </button>
+                  ))}
                 </div>
               )}
             </div>
@@ -918,9 +1063,18 @@ export const TryOnStudio: React.FC<TryOnStudioProps> = ({
         {/* Bottom Thumb-Zone Dock (Zero occlusion over portrait feet!) */}
         <div className="shrink-0 border-t border-[#E6E1D8] bg-white">
           {/* Layer Quick-Select Strip when wearing clothes */}
-          {sortedLayers.length > 0 && !occlusionMode && (
+          {sortedLayers.length > 0 && !occlusionMode && !poseCalibrateMode && (
             <div className="flex items-center gap-1.5 overflow-x-auto border-b border-[#E6E1D8] px-3 py-1.5 no-scrollbar">
-              <span className="text-[11px] text-[#6E6A63] shrink-0">已穿：</span>
+              <button
+                type="button"
+                disabled={isAutoFitting}
+                onClick={() => void onAutoFitLayers()}
+                className="min-h-[30px] inline-flex items-center gap-1 border border-[#141414] bg-[#F2EFE9] px-2 text-[11px] font-medium text-[#141414] shrink-0 disabled:opacity-45"
+                title="根据模特肩腰腿比例一键重新贴合所有未锁定衣物"
+              >
+                <Wand2 className="h-3 w-3" />
+                <span>{isAutoFitting ? '贴合中...' : '一键贴合'}</span>
+              </button>
               {sortedLayers.map((layer) => {
                 const g = garmentMap.get(layer.garmentId);
                 if (!g) return null;
@@ -930,7 +1084,7 @@ export const TryOnStudio: React.FC<TryOnStudioProps> = ({
                     key={layer.instanceId}
                     type="button"
                     onClick={() => onSelectInstance(active ? null : layer.instanceId)}
-                    className={`min-h-[30px] max-w-[116px] truncate border px-2.5 text-[11px] font-medium shrink-0 transition-colors ${
+                    className={`min-h-[30px] max-w-[110px] truncate border px-2.5 text-[11px] font-medium shrink-0 transition-colors ${
                       active
                         ? 'border-[#141414] bg-[#141414] text-[#FAF8F5]'
                         : 'border-[#E6E1D8] bg-[#FAF8F5] text-[#141414]'
@@ -943,8 +1097,55 @@ export const TryOnStudio: React.FC<TryOnStudioProps> = ({
             </div>
           )}
 
-          {/* Dock Mode 1: Occlusion Brush Controls */}
-          {occlusionMode && selectedLayer && selectedGarment ? (
+          {/* Dock Mode 0: Body Pose Calibration Controls */}
+          {poseCalibrateMode && activeModel && draftLandmarks ? (
+            <div className="p-2.5 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-[#141414] truncate">
+                  拖动红点校准肩 / 胯 / 踝
+                </span>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await onUpdateModelLandmarks(activeModel.id, draftLandmarks);
+                    const saved = draftLandmarks;
+                    setPoseCalibrateMode(false);
+                    setDraftLandmarks(null);
+                    if (layers.length > 0) {
+                      await onAutoFitLayers(undefined, saved);
+                    }
+                  }}
+                  className="min-h-[38px] inline-flex items-center gap-1 bg-[#141414] px-3.5 text-xs font-medium text-[#FAF8F5] shrink-0"
+                >
+                  <Check className="h-3.5 w-3.5" />
+                  <span>保存并贴合</span>
+                </button>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={isAutoFitting}
+                  onClick={async () => {
+                    const detected = await onRedetectModelLandmarks(activeModel.id);
+                    if (detected) setDraftLandmarks(detected);
+                  }}
+                  className="flex-1 min-h-[38px] inline-flex items-center justify-center gap-1.5 border border-[#141414] bg-white px-3 text-xs font-medium text-[#141414] disabled:opacity-45"
+                >
+                  <ScanLine className="h-3.5 w-3.5" />
+                  <span>{isAutoFitting ? '识别中...' : '离线自动识别姿态'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDraftLandmarks(getDefaultBodyLandmarks())}
+                  className="min-h-[38px] inline-flex items-center justify-center gap-1 border border-[#E6E1D8] px-3 text-xs text-[#6E6A63]"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  <span>标准比例</span>
+                </button>
+              </div>
+            </div>
+          ) : occlusionMode && selectedLayer && selectedGarment ? (
+            /* Dock Mode 1: Occlusion Brush Controls */
             <div className="p-2.5 space-y-2">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-xs font-semibold text-[#141414] truncate">
@@ -1016,6 +1217,16 @@ export const TryOnStudio: React.FC<TryOnStudioProps> = ({
               >
                 <Plus className="h-3.5 w-3.5" />
                 <span>添衣</span>
+              </button>
+              <button
+                type="button"
+                disabled={isAutoFitting || selectedLayer.locked}
+                onClick={() => void onAutoFitLayers(selectedLayer.instanceId)}
+                className="min-h-[42px] inline-flex items-center gap-1 border border-[#141414] bg-[#F2EFE9] px-2.5 text-xs font-medium text-[#141414] shrink-0 disabled:opacity-40"
+                title="自动对准模特肩腰腿"
+              >
+                <Wand2 className="h-3.5 w-3.5" />
+                <span>贴合</span>
               </button>
               <button
                 type="button"
@@ -1104,15 +1315,25 @@ export const TryOnStudio: React.FC<TryOnStudioProps> = ({
               </button>
             </div>
           ) : (
-            /* Dock Mode 3: Portrait Quick Wardrobe Strip + Open Drawer Button */
+            /* Dock Mode 3: Portrait Quick Wardrobe Strip + Open Drawer + Random Button */
             <div className="flex items-center gap-2 px-3 py-2">
               <button
                 type="button"
                 onClick={() => setDrawerOpen(true)}
-                className="min-h-[48px] inline-flex flex-col items-center justify-center gap-0.5 bg-[#141414] px-3.5 text-[11px] font-medium text-[#FAF8F5] shrink-0"
+                className="min-h-[48px] inline-flex flex-col items-center justify-center gap-0.5 bg-[#141414] px-3 text-[11px] font-medium text-[#FAF8F5] shrink-0"
               >
                 <Plus className="h-4 w-4" />
                 <span>选衣库</span>
+              </button>
+              <button
+                type="button"
+                disabled={!activeModel || garments.length === 0 || isAutoFitting}
+                onClick={() => void onRandomOutfit()}
+                className="min-h-[48px] inline-flex flex-col items-center justify-center gap-0.5 border border-[#141414] bg-[#F2EFE9] px-2.5 text-[11px] font-medium text-[#141414] shrink-0 disabled:opacity-40"
+                title="随机生成整套穿搭并自动贴合"
+              >
+                <Shuffle className="h-4 w-4" />
+                <span>随机搭</span>
               </button>
               <div className="flex flex-1 items-center gap-2 overflow-x-auto no-scrollbar">
                 {garments.slice(0, 10).map((item) => (

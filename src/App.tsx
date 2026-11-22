@@ -4,6 +4,7 @@ import {
   GARMENT_CATEGORIES,
   getCategoryLabel,
   type AppTab,
+  type BodyLandmarks,
   type BoundAlbum,
   type GarmentCategory,
   type GarmentColorId,
@@ -37,6 +38,8 @@ import {
   extractDominantColorFromBlob,
   processUploadedImage,
 } from './lib/imageEngine';
+import { computeAutoFitTransform, detectBodyLandmarks } from './lib/poseFit';
+import { generateRandomOutfitLayers } from './lib/randomOutfit';
 import { pickAndBindFolder, syncBoundAlbum } from './lib/albumSync';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { OfflineBanner } from './components/OfflineBanner';
@@ -69,6 +72,7 @@ export default function App() {
   const [studioLayers, setStudioLayers] = useState<OutfitLayer[]>([]);
   const [selectedInstanceId, setSelectedInstanceId] = useState<string | null>(null);
   const [duplicateConfirmGarment, setDuplicateConfirmGarment] = useState<GarmentItem | null>(null);
+  const [isAutoFitting, setIsAutoFitting] = useState(false);
 
   const [cutoutEditor, setCutoutEditor] = useState<CutoutEditorState | null>(null);
   const [showBackupModal, setShowBackupModal] = useState(false);
@@ -126,6 +130,63 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [activeModelId, studioLayers, isInitializing]);
 
+  const ensureModelLandmarks = useCallback(async (model: ModelPortrait): Promise<BodyLandmarks> => {
+    if (model.poseLandmarks) return model.poseLandmarks;
+    const detected = await detectBodyLandmarks(model.imageBlob);
+    const updated: ModelPortrait = { ...model, poseLandmarks: detected };
+    await saveModel(updated);
+    setModels((prev) => prev.map((m) => (m.id === model.id ? { ...m, poseLandmarks: detected } : m)));
+    return detected;
+  }, []);
+
+  // Automatically analyze active model's body pose offline in background if missing
+  useEffect(() => {
+    if (isInitializing || !activeModelId) return;
+    const target = models.find((m) => m.id === activeModelId);
+    if (!target || target.poseLandmarks) return;
+    let cancelled = false;
+    (async () => {
+      const detected = await detectBodyLandmarks(target.imageBlob);
+      if (cancelled) return;
+      await saveModel({ ...target, poseLandmarks: detected });
+      setModels((prev) => prev.map((m) => (m.id === target.id ? { ...m, poseLandmarks: detected } : m)));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeModelId, models, isInitializing]);
+
+  const handleUpdateModelLandmarks = useCallback(async (modelId: string, landmarks: BodyLandmarks) => {
+    const target = models.find((m) => m.id === modelId);
+    if (!target) return;
+    const updated: ModelPortrait = { ...target, poseLandmarks: landmarks };
+    await saveModel(updated);
+    setModels((prev) => prev.map((m) => (m.id === modelId ? updated : m)));
+  }, [models]);
+
+  const handleRedetectModelLandmarks = useCallback(
+    async (modelId: string): Promise<BodyLandmarks | null> => {
+      const target = models.find((m) => m.id === modelId);
+      if (!target) return null;
+      setIsAutoFitting(true);
+      try {
+        const detected = await detectBodyLandmarks(target.imageBlob);
+        const updated: ModelPortrait = { ...target, poseLandmarks: detected };
+        await saveModel(updated);
+        setModels((prev) => prev.map((m) => (m.id === modelId ? updated : m)));
+        showToast(
+          detected.source === 'auto'
+            ? '已自动识别模特肩腰腿身形锚点'
+            : '未检测到清晰全身姿态，已载入标准比例锚点'
+        );
+        return detected;
+      } finally {
+        setIsAutoFitting(false);
+      }
+    },
+    [models, showToast]
+  );
+
   // --- Model Handlers ---
   const handleUploadModel = async (file: File) => {
     const processed = await processUploadedImage(file, 1280, false);
@@ -143,7 +204,10 @@ export default function App() {
     await saveModel(newModel);
     await refreshAllData();
     setActiveModelId(newModel.id);
-    showToast('已添加新试衣人像');
+    showToast('已添加新试衣人像，正在自动识别身形...');
+    const detected = await detectBodyLandmarks(newModel.imageBlob);
+    await saveModel({ ...newModel, poseLandmarks: detected });
+    setModels((prev) => prev.map((m) => (m.id === newModel.id ? { ...m, poseLandmarks: detected } : m)));
   };
 
   const handleSetDefaultModel = async (id: string) => {
@@ -358,19 +422,48 @@ export default function App() {
     showToast('已删除单品');
   };
 
-  // --- Try-On Layer Addition with Duplicate Confirmation Prompt ---
+  // --- Try-On Layer Addition with Offline Pose Auto-Fit & Duplicate Confirmation ---
   const appendGarmentLayerToStudio = useCallback(
-    (garment: GarmentItem) => {
+    async (garment: GarmentItem) => {
       const meta = GARMENT_CATEGORIES.find((c) => c.id === garment.category);
       const maxZ = studioLayers.reduce((acc, l) => Math.max(acc, l.zIndex), 10);
       const instanceId = `layer_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+      let x = 50;
+      let y = meta?.defaultY ?? 45;
+      let scale = meta?.defaultScale ?? 0.45;
+      let rotation = 0;
+
+      const activeModel = models.find((m) => m.id === activeModelId) ?? models[0] ?? null;
+      if (activeModel) {
+        setIsAutoFitting(true);
+        try {
+          const landmarks = await ensureModelLandmarks(activeModel);
+          const fit = await computeAutoFitTransform(
+            activeModel.width,
+            activeModel.height,
+            landmarks,
+            garment.category,
+            garment.cutoutBlob
+          );
+          x = fit.x;
+          y = fit.y;
+          scale = fit.scale;
+          rotation = fit.rotation;
+        } catch {
+          // Fall back to category defaults
+        } finally {
+          setIsAutoFitting(false);
+        }
+      }
+
       const newLayer: OutfitLayer = {
         instanceId,
         garmentId: garment.id,
-        x: 50,
-        y: meta?.defaultY ?? 45,
-        scale: meta?.defaultScale ?? 0.45,
-        rotation: 0,
+        x,
+        y,
+        scale,
+        rotation,
         flipX: false,
         opacity: 1,
         brightness: 1,
@@ -383,9 +476,58 @@ export default function App() {
       setStudioLayers((prev) => [...prev, newLayer]);
       setSelectedInstanceId(instanceId);
       setActiveTab('studio');
-      showToast(`已将「${garment.name}」穿到试衣间`);
+      showToast(`已自动贴合穿上「${garment.name}」`);
     },
-    [studioLayers, showToast]
+    [studioLayers, models, activeModelId, ensureModelLandmarks, showToast]
+  );
+
+  const handleAutoFitLayers = useCallback(
+    async (
+      targetInstanceId?: string,
+      overrideModelId?: string,
+      overrideLandmarks?: BodyLandmarks
+    ) => {
+      const modelId = overrideModelId ?? activeModelId;
+      const targetModel = models.find((m) => m.id === modelId) ?? models[0] ?? null;
+      if (!targetModel) return;
+
+      setIsAutoFitting(true);
+      try {
+        const landmarks = overrideLandmarks ?? (await ensureModelLandmarks(targetModel));
+        const garmentLookup = new Map(garments.map((g) => [g.id, g]));
+        const nextTransforms = new Map<string, { x: number; y: number; scale: number; rotation: number }>();
+
+        for (const layer of studioLayers) {
+          if (targetInstanceId && layer.instanceId !== targetInstanceId) continue;
+          if (!targetInstanceId && layer.locked) continue;
+          const g = garmentLookup.get(layer.garmentId);
+          if (!g) continue;
+          const fit = await computeAutoFitTransform(
+            targetModel.width,
+            targetModel.height,
+            landmarks,
+            g.category,
+            g.cutoutBlob
+          );
+          nextTransforms.set(layer.instanceId, fit);
+        }
+
+        if (nextTransforms.size > 0) {
+          setStudioLayers((prev) =>
+            prev.map((l) => {
+              const fit = nextTransforms.get(l.instanceId);
+              return fit ? { ...l, ...fit } : l;
+            })
+          );
+          showToast(
+            targetInstanceId ? '已自动贴合当前单品到模特身形' : '已将全套衣物自动贴合模特身形'
+          );
+        }
+      } finally {
+        setIsAutoFitting(false);
+      }
+    },
+    [activeModelId, models, garments, studioLayers, ensureModelLandmarks, showToast]
   );
 
   const handleRequestAddGarment = useCallback(
@@ -395,10 +537,40 @@ export default function App() {
         setDuplicateConfirmGarment(garment);
         return;
       }
-      appendGarmentLayerToStudio(garment);
+      void appendGarmentLayerToStudio(garment);
     },
     [studioLayers, appendGarmentLayerToStudio]
   );
+
+  const handleRandomOutfit = useCallback(async () => {
+    if (garments.length === 0) {
+      showToast('衣橱中暂无单品，请先添加衣物');
+      return;
+    }
+    const targetModel = models.find((m) => m.id === activeModelId) ?? models[0] ?? null;
+    setIsAutoFitting(true);
+    try {
+      const landmarks = targetModel ? await ensureModelLandmarks(targetModel) : undefined;
+      const result = await generateRandomOutfitLayers(
+        garments,
+        studioLayers,
+        targetModel,
+        landmarks
+      );
+      setStudioLayers(result.layers);
+      setSelectedInstanceId(null);
+      setActiveTab('studio');
+      if (result.keptLockedCount > 0) {
+        showToast(
+          `已保留 ${result.keptLockedCount} 件锁定单品，并随机搭配 ${result.pickedItems.length} 件新单品`
+        );
+      } else {
+        showToast(`已随机搭配 ${result.pickedItems.length} 件单品并自动贴合身形`);
+      }
+    } finally {
+      setIsAutoFitting(false);
+    }
+  }, [garments, models, activeModelId, studioLayers, ensureModelLandmarks, showToast]);
 
   // --- Lookbook Save / Reload / Delete ---
   const handleSaveLookbook = async (payload: {
@@ -477,7 +649,12 @@ export default function App() {
           <TryOnStudio
             models={models}
             activeModelId={activeModelId}
-            onSelectModel={setActiveModelId}
+            onSelectModel={(id) => {
+              setActiveModelId(id);
+              if (studioLayers.length > 0) {
+                void handleAutoFitLayers(undefined, id);
+              }
+            }}
             onQuickUploadModel={handleUploadModel}
             garments={garments}
             layers={studioLayers}
@@ -493,6 +670,13 @@ export default function App() {
                 initialItem: g,
               })
             }
+            onUpdateModelLandmarks={handleUpdateModelLandmarks}
+            onRedetectModelLandmarks={handleRedetectModelLandmarks}
+            onAutoFitLayers={(instanceId, overrideLandmarks) =>
+              handleAutoFitLayers(instanceId, undefined, overrideLandmarks)
+            }
+            onRandomOutfit={handleRandomOutfit}
+            isAutoFitting={isAutoFitting}
             onSaveLookbook={handleSaveLookbook}
             onGoToWardrobe={() => setActiveTab('wardrobe')}
           />
